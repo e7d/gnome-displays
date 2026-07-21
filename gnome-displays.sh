@@ -4,6 +4,7 @@ set -o pipefail
 
 SCRIPT_NAME=$(basename "$0" .sh)
 VERSION="dev"
+REPO="e7d/gnome-displays"
 CONFIG_DIR="$HOME/.config/gnome-displays"
 INSTALL_DIR="$HOME/.local/bin"
 INSTALL_PATH="$INSTALL_DIR/gnome-displays"
@@ -28,6 +29,16 @@ version() {
   echo "$SCRIPT_NAME $VERSION"
 }
 
+fetch_url() {
+  if command -v curl &>/dev/null; then
+    curl -fsSL "$1"
+  elif command -v wget &>/dev/null; then
+    wget -qO- "$1"
+  else
+    return 1
+  fi
+}
+
 help() {
   echo "Usage: $SCRIPT_NAME <action> [arguments]"
   echo
@@ -41,6 +52,7 @@ help() {
   echo "  service      Manage the auto-apply user service (login & monitor hotplug)."
   echo "  setup        Install this script as a command in ~/.local/bin."
   echo "  show         Show details of a saved display configuration."
+  echo "  update       Update to the latest released version."
   echo "  verify       Verify a saved display configuration."
   echo "  version      Show the installed version."
   echo
@@ -68,6 +80,9 @@ help() {
   echo "    --remove     Uninstall the command from ~/.local/bin."
   echo "  show <name>"
   echo "    <name>       Name of the configuration to show."
+  echo "  update [--check] [--force]"
+  echo "    --check      Report whether a newer version is available, without installing."
+  echo "    --force      Re-download and reinstall even if already up to date."
   echo "  verify <name>"
   echo "    <name>       Name of the configuration to verify."
   echo
@@ -91,7 +106,7 @@ _gnome_displays_completions() {
   COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  opts="apply completion delete help list save service setup show verify"
+  opts="apply completion delete help list save service setup show update verify version"
   case "$prev" in
     apply)
       configs="auto --force --persistent --temporary $(__SCRIPT_NAME__ list --available --raw 2>/dev/null)"
@@ -117,6 +132,10 @@ _gnome_displays_completions() {
       ;;
     setup)
       COMPREPLY=( $(compgen -W "--remove" -- "$cur") )
+      return 0
+      ;;
+    update)
+      COMPREPLY=( $(compgen -W "--check --force" -- "$cur") )
       return 0
       ;;
   esac
@@ -151,7 +170,9 @@ complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcomman
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "service" --description "Manage the auto-apply user service"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "setup" --description "Install the command in ~/.local/bin"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "show" --description "Show details of a specific display configuration"
+complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "update" --description "Update to the latest released version"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "verify" --description "Verify a saved display configuration"
+complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "version" --description "Show the installed version"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "watch" --description "Advanced: apply now and re-apply on monitor changes"
 # <name>
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_seen_subcommand_from show" --arguments "(__gnome_displays_config_names)" --description "Configuration name"
@@ -168,6 +189,9 @@ complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from serv
 complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from service" --long-option "status" --description "Show install and running state"
 complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from service" --long-option "remove" --description "Stop, disable and remove the service"
 complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from setup" --long-option "remove" --description "Uninstall the command"
+# update options
+complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from update" --long-option "check" --description "Report whether a newer version is available"
+complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from update" --long-option "force" --description "Re-download and reinstall even if up to date"
 # <shell>
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_seen_subcommand_from completion" --arguments "bash fish zsh" --description "Shell type"
 EOF
@@ -179,7 +203,7 @@ EOF
 ___SCRIPT_NAME___completions() {
   local context state line
   local -a actions
-  actions=(apply completion delete help list save service setup show verify watch)
+  actions=(apply completion delete help list save service setup show update verify version watch)
   local -a configs_all
   local -a configs_available
   configs_all=()
@@ -194,7 +218,7 @@ ___SCRIPT_NAME___completions() {
     done
   fi
   _arguments -C \
-    '1:action:((apply completion delete help list save service setup show verify watch))' \
+    '1:action:((apply completion delete help list save service setup show update verify version watch))' \
     '2:shell:(bash fish zsh)' \
     '2:config name:->config'
 
@@ -209,6 +233,8 @@ ___SCRIPT_NAME___completions() {
         _describe -t options 'service options' '(--install --status --remove)'
       elif [[ ${words[2]} == "setup" ]]; then
         _describe -t options 'setup options' '(--remove)'
+      elif [[ ${words[2]} == "update" ]]; then
+        _describe -t options 'update options' '(--check --force)'
       fi
       ;;
   esac
@@ -728,6 +754,106 @@ delete() {
   fi
 }
 
+update() {
+  shift
+  local FORCE=false CHECK_ONLY=false ARG
+  for ARG in "$@"; do
+    case "$ARG" in
+    --force)
+      FORCE=true
+      ;;
+    --check)
+      CHECK_ONLY=true
+      ;;
+    *)
+      err "Error: Unknown option: $ARG"
+      err "Usage: $SCRIPT_NAME update [--check] [--force]"
+      exit 1
+      ;;
+    esac
+  done
+
+  local MISSING=()
+  command -v jq &>/dev/null || MISSING+=("jq")
+  command -v sha256sum &>/dev/null || MISSING+=("sha256sum")
+  { command -v curl &>/dev/null || command -v wget &>/dev/null; } || MISSING+=("curl or wget")
+  if [[ ${#MISSING[@]} -gt 0 ]]; then
+    err "Missing dependencies for update: ${MISSING[*]}"
+    exit 1
+  fi
+
+  local LATEST LATEST_VERSION
+  LATEST=$(fetch_url "https://api.github.com/repos/$REPO/releases/latest" | jq -r '.tag_name // empty')
+  [[ -n "$LATEST" ]] || {
+    err "Could not determine the latest release."
+    exit 1
+  }
+  LATEST_VERSION="${LATEST#v}"
+
+  echo "Installed: $VERSION"
+  echo "Latest:    $LATEST_VERSION"
+
+  if [[ "$VERSION" == "$LATEST_VERSION" && "$FORCE" != "true" ]]; then
+    echo "Already up to date."
+    return 0
+  fi
+
+  if [[ "$CHECK_ONLY" == "true" ]]; then
+    echo "Run '$SCRIPT_NAME update' to install $LATEST_VERSION."
+    return 0
+  fi
+
+  if [[ "$VERSION" == "dev" ]]; then
+    err "This is a source checkout (version 'dev'); refusing to overwrite it."
+    err "Update your checkout with git instead."
+    exit 1
+  fi
+
+  local SELF DIR BASE TMP SUMS EXPECTED ACTUAL
+  SELF=$(readlink -f "$0")
+  DIR=$(dirname "$SELF")
+  BASE="https://github.com/$REPO/releases/download/$LATEST"
+
+  TMP=$(mktemp "$DIR/.gnome-displays.XXXXXX") || {
+    err "Cannot write to $DIR."
+    exit 1
+  }
+  SUMS=$(mktemp)
+  trap 'rm -f "$TMP" "$SUMS"' EXIT
+
+  echo -n "Downloading $LATEST_VERSION... "
+  fetch_url "$BASE/gnome-displays.sh" >"$TMP" && [[ -s "$TMP" ]] || {
+    echo "❌"
+    err "Download failed."
+    exit 1
+  }
+  fetch_url "$BASE/SHA256SUMS" >"$SUMS" || {
+    echo "❌"
+    err "Could not fetch checksums."
+    exit 1
+  }
+  EXPECTED=$(awk '$2 == "gnome-displays.sh" { print $1 }' "$SUMS")
+  ACTUAL=$(sha256sum "$TMP" | cut -d' ' -f1)
+  if [[ -z "$EXPECTED" || "$ACTUAL" != "$EXPECTED" ]]; then
+    echo "❌"
+    err "Checksum verification failed; not updating."
+    exit 1
+  fi
+  echo "✅"
+
+  chmod 755 "$TMP"
+  mv -f "$TMP" "$SELF" || {
+    err "Could not replace $SELF."
+    exit 1
+  }
+  echo "Updated $(bold "$SELF") to $LATEST_VERSION."
+
+  if [[ "$SELF" == "$INSTALL_PATH" ]] && command -v systemctl &>/dev/null &&
+    systemctl --user is-active --quiet "$SERVICE_NAME"; then
+    systemctl --user restart "$SERVICE_NAME" && echo "Restarted $SERVICE_NAME."
+  fi
+}
+
 watch() {
   check_dependencies gdbus
 
@@ -979,6 +1105,9 @@ setup)
   ;;
 show)
   COMMAND="show"
+  ;;
+update)
+  COMMAND="update"
   ;;
 verify)
   COMMAND="verify"

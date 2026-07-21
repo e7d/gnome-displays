@@ -67,6 +67,15 @@ Follow along in the journal:
 journalctl --user -u gnome-displays.service -f
 ```
 
+## Updating
+
+```sh
+gnome-displays update          # fetch and install the latest release
+gnome-displays update --check  # only report whether a newer version exists
+```
+
+It downloads the latest release, verifies its checksum, and replaces itself in place. If the service is running, it's restarted so the new version takes effect.
+
 ## Requirements
 
 - GNOME 48 or newer (it drives `gdctl`)
