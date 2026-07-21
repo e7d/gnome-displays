@@ -26,6 +26,8 @@ List what you've saved (append `--available` to show only the ones whose monitor
 gnome-displays list
 ```
 
+The profile matching your current layout is highlighted in green with a `*`, and profiles missing some of their monitors are dimmed.
+
 Apply one by name, or let it pick the best match for whatever is connected:
 
 ```sh

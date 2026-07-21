@@ -21,6 +21,18 @@ bold() {
   echo -e "\033[1m$1\033[0m"
 }
 
+green_bold() {
+  echo -e "\033[1;32m$1\033[0m"
+}
+
+green() {
+  echo -e "\033[32m$1\033[0m"
+}
+
+dim() {
+  echo -e "\033[2m$1\033[0m"
+}
+
 err() {
   echo "$@" >&2
 }
@@ -329,8 +341,15 @@ print_monitor() {
   local NAME="$1"
   local FOUND_MONITORS="$2"
   local MONITORS="$3"
+  local IS_CURRENT="$4"
 
-  echo "$(bold "$NAME") ($FOUND_MONITORS/$MONITORS monitors)"
+  if [[ "$IS_CURRENT" == "true" ]]; then
+    echo "$(green_bold "*") $(green_bold "$NAME") $(green "($FOUND_MONITORS/$MONITORS monitors)")"
+  elif [[ $FOUND_MONITORS -lt $MONITORS ]]; then
+    echo "  $(dim "$NAME ($FOUND_MONITORS/$MONITORS monitors)")"
+  else
+    echo "  $(bold "$NAME") ($FOUND_MONITORS/$MONITORS monitors)"
+  fi
 }
 
 count_found_monitors() {
@@ -366,6 +385,9 @@ print_configurations() {
 
   check_dependencies
 
+  local CURRENT_JSON IS_CURRENT
+  CURRENT_JSON=$(current_config_json 2>/dev/null)
+
   for FILE in "${FILES[@]}"; do
     NAME=$(basename "$FILE" .json)
     MONITORS=$(jq -r '. | length' "$FILE")
@@ -376,7 +398,11 @@ print_configurations() {
     if [[ "$RAW_MODE" == "true" ]]; then
       echo "$NAME"
     else
-      print_monitor "$NAME" "$FOUND_MONITORS" "$MONITORS"
+      IS_CURRENT=false
+      if [[ -n "$CURRENT_JSON" ]] && config_matches_json "$CURRENT_JSON" "$FILE"; then
+        IS_CURRENT=true
+      fi
+      print_monitor "$NAME" "$FOUND_MONITORS" "$MONITORS" "$IS_CURRENT"
     fi
   done
 }
@@ -547,14 +573,20 @@ save() {
   echo "Display configuration $(bold "$NAME") saved."
 }
 
-config_matches_current() {
-  local CONFIG_FILE="$1"
-  local CURRENT
-  CURRENT=$(current_config_json) || return 1
+config_matches_json() {
+  local CURRENT="$1"
+  local CONFIG_FILE="$2"
   jq -es \
     '(.[0] | sort_by(.vendor, .product, .serial))
        == (.[1] | sort_by(.vendor, .product, .serial))' \
     <(echo "$CURRENT") "$CONFIG_FILE" >/dev/null 2>&1
+}
+
+config_matches_current() {
+  local CONFIG_FILE="$1"
+  local CURRENT
+  CURRENT=$(current_config_json) || return 1
+  config_matches_json "$CURRENT" "$CONFIG_FILE"
 }
 
 get_missing_monitors() {
