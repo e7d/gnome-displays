@@ -3,6 +3,7 @@
 set -o pipefail
 
 SCRIPT_NAME=$(basename "$0" .sh)
+VERSION="dev"
 CONFIG_DIR="$HOME/.config/gnome-displays"
 INSTALL_DIR="$HOME/.local/bin"
 INSTALL_PATH="$INSTALL_DIR/gnome-displays"
@@ -23,6 +24,10 @@ err() {
   echo "$@" >&2
 }
 
+version() {
+  echo "$SCRIPT_NAME $VERSION"
+}
+
 help() {
   echo "Usage: $SCRIPT_NAME <action> [arguments]"
   echo
@@ -37,6 +42,7 @@ help() {
   echo "  setup        Install this script as a command in ~/.local/bin."
   echo "  show         Show details of a saved display configuration."
   echo "  verify       Verify a saved display configuration."
+  echo "  version      Show the installed version."
   echo
   echo "Arguments and options:"
   echo "  apply [<name>|auto] [--force] [--persistent|--temporary]"
@@ -976,6 +982,10 @@ show)
   ;;
 verify)
   COMMAND="verify"
+  ;;
+version | --version | -v)
+  version
+  exit 0
   ;;
 watch)
   COMMAND="watch"
