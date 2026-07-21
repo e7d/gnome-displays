@@ -15,6 +15,7 @@ SUMS_URL="$RELEASE_URL/SHA256SUMS"
 
 INSTALL_DIR="${GNOME_DISPLAYS_INSTALL_DIR:-$HOME/.local/bin}"
 INSTALL_PATH="$INSTALL_DIR/gnome-displays"
+TMPFILE=""
 
 bold() { printf '\033[1m%s\033[0m\n' "$1"; }
 err() { echo "$@" >&2; }
@@ -24,8 +25,8 @@ die() {
 }
 have() { command -v "$1" &>/dev/null; }
 
-# under `curl | bash`, stdin is the script itself, so prompts must use the tty
-if [[ -r /dev/tty ]]; then
+# under `curl | bash`, stdin is the script itself, not the keyboard
+if { true <"/dev/tty"; } 2>/dev/null; then
   TTY=/dev/tty
 else
   TTY=""
@@ -33,8 +34,8 @@ fi
 
 confirm() {
   [[ -n "$TTY" ]] || return 1
-  local reply
-  read -rp "$1" reply <"$TTY"
+  local reply=""
+  read -rp "$1" reply <"$TTY" || return 1
   [[ "$reply" =~ ^[Yy]$ ]]
 }
 
@@ -90,17 +91,16 @@ main() {
 
   echo "Installing gnome-displays ($VERSION) from $SCRIPT_URL"
 
-  local tmp
-  tmp=$(mktemp)
-  trap 'rm -f "$tmp"' EXIT
+  TMPFILE=$(mktemp)
+  trap 'rm -f "$TMPFILE"' EXIT
 
-  fetch "$SCRIPT_URL" >"$tmp" || die "Download failed (no release for '$VERSION'?)."
-  [[ -s "$tmp" ]] || die "Download was empty."
-  head -n1 "$tmp" | grep -q '^#!' || die "Download does not look like a script."
-  verify_checksum "$tmp"
+  fetch "$SCRIPT_URL" >"$TMPFILE" || die "Download failed (no release for '$VERSION'?)."
+  [[ -s "$TMPFILE" ]] || die "Download was empty."
+  head -n1 "$TMPFILE" | grep -q '^#!' || die "Download does not look like a script."
+  verify_checksum "$TMPFILE"
 
   mkdir -p "$INSTALL_DIR"
-  install -m 755 "$tmp" "$INSTALL_PATH"
+  install -m 755 "$TMPFILE" "$INSTALL_PATH"
   bold "Installed $("$INSTALL_PATH" version)"
 
   warn_path
