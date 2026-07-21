@@ -75,7 +75,7 @@ help() {
   echo "    --force      Re-apply even if the profile is already in use."
   echo "    --persistent Persist across reboots; prompts for confirmation (default)."
   echo "    --temporary  Apply for this session only; no confirmation prompt."
-  echo "    --partial    Apply only the connected monitors, leaving the rest off (implies --temporary)."
+  echo "    --partial    Apply only the connected monitors, leaving the rest off."
   echo "  completion <shell>"
   echo "    <shell>      Shell to target: bash, fish or zsh."
   echo "  delete <name>"
@@ -826,10 +826,6 @@ apply() {
       ;;
     esac
   done
-
-  if [[ "$PARTIAL" == "true" ]]; then
-    MODE="--temporary"
-  fi
 
   if [[ -z "$NAME" || "$NAME" == "auto" ]]; then
     apply_auto "$FORCE" "$MODE" "$PARTIAL"

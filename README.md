@@ -37,7 +37,7 @@ gnome-displays apply          # auto-select
 
 Applying persists across reboots and asks GNOME to confirm the change, same as the Settings panel. Pass `--temporary` to apply for the current session only, without the confirmation prompt.
 
-When some of a profile's monitors aren't connected, `--partial` applies just the ones that are and leaves the rest off (temporary, since it's a degraded layout):
+When some of a profile's monitors aren't connected, `--partial` applies just the ones that are and leaves the rest off. It follows the same `--persistent`/`--temporary` rules as a normal apply:
 
 ```sh
 gnome-displays apply office --partial
