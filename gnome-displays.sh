@@ -969,7 +969,9 @@ connected_signature() {
 watch() {
   check_dependencies gdbus
 
-  echo "$SCRIPT_NAME version $VERSION started."
+  local display_version="$VERSION"
+  [[ "$display_version" != "dev" ]] && display_version="v$display_version"
+  echo "$SCRIPT_NAME version $display_version started."
 
   local i
   for ((i = 0; i < 30; i++)); do
@@ -1118,7 +1120,8 @@ service_install() {
   check_dependencies systemctl
   write_service_unit
   systemctl --user daemon-reload
-  systemctl --user enable --now "$SERVICE_NAME"
+  systemctl --user enable "$SERVICE_NAME"
+  systemctl --user restart "$SERVICE_NAME"
   echo "Service $(bold "$SERVICE_NAME") installed and started."
   echo "Logs: journalctl --user -u $SERVICE_NAME -f"
 }
