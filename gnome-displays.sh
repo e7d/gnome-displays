@@ -969,6 +969,8 @@ connected_signature() {
 watch() {
   check_dependencies gdbus
 
+  echo "$SCRIPT_NAME version $VERSION started."
+
   local i
   for ((i = 0; i < 30; i++)); do
     mutter_available && break
