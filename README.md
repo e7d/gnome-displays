@@ -8,13 +8,13 @@ curl -fsSL https://github.com/e7d/gnome-displays/releases/latest/download/instal
 
 ## Why this exists
 
-GNOME keeps one remembered arrangement per set of monitors, and re-detection isn't always kind about restoring it. Dock the laptop and the windows scatter; unplug and the primary display ends up on the wrong screen; plug in a projector and you're back in the Settings panel dragging rectangles around.
+GNOME keeps one remembered layout per set of monitors, and re-detection isn't always kind about restoring it. Dock the laptop and the windows scatter; unplug and the primary display ends up on the wrong screen; plug in a projector and you're back in the Settings panel dragging rectangles around.
 
-So I save each arrangement as a named profile and reapply the right one when I need it, or let a small service do it for me every time the monitors change.
+So I save each layout by name and reapply the right one when I need it, or let a small service do it for me every time the monitors change.
 
 ## Usage
 
-Save the current arrangement:
+Save the current layout:
 
 ```sh
 gnome-displays save office
@@ -38,19 +38,21 @@ Applying persists across reboots and asks GNOME to confirm the change, same as t
 The rest:
 
 ```sh
-gnome-displays show office     # print a profile's monitors and settings
+gnome-displays show office     # print a layout's monitors and settings
 gnome-displays verify office   # check a profile applies cleanly
 gnome-displays delete office
 ```
 
 ## Apply automatically
 
-Install a systemd user service that applies the best matching profile at login and again whenever you plug or unplug a monitor:
+Install a systemd user service that applies the best matching layout at login and again whenever you plug or unplug a monitor:
 
 ```sh
 gnome-displays setup             # copy the command into ~/.local/bin
 gnome-displays service --install
 ```
+
+If you used the one-liner above, `setup` already ran; you only need it when you put the script in place by hand.
 
 It applies in temporary mode, so no confirmation dialog interrupts you, and it waits for the display to settle before acting (docks can take a while to sort themselves out). Check on it or remove it:
 
@@ -76,10 +78,12 @@ It talks to Mutter, so it's for GNOME sessions. It won't do anything useful unde
 ## Shell completion
 
 ```sh
-gnome-displays completion fish > ~/.config/fish/completions/gnome-displays.fish
 gnome-displays completion bash > ~/.local/share/bash-completion/completions/gnome-displays
+gnome-displays completion fish > ~/.config/fish/completions/gnome-displays.fish
 gnome-displays completion zsh  > ~/.zfunc/_gnome-displays
 ```
+
+For zsh, that directory has to be on your `$fpath`. If it isn't already, add `fpath+=~/.zfunc` before `compinit` in `~/.zshrc`.
 
 ## Installing by hand
 
@@ -91,6 +95,6 @@ less install.sh
 bash install.sh
 ```
 
-Or grab `gnome-displays.sh` from the [latest release](https://github.com/e7d/gnome-displays/releases/latest), drop it somewhere on your `PATH`, and make it executable. To pin a version, set `GNOME_DISPLAYS_VERSION=0.1.0` before running the installer.
+Or grab `gnome-displays.sh` from the [latest release](https://github.com/e7d/gnome-displays/releases/latest), drop it somewhere on your `PATH`, and make it executable. To pin a version, set `GNOME_DISPLAYS_VERSION` to any tag from the [releases page](https://github.com/e7d/gnome-displays/releases) before running the installer.
 
 To remove everything: `gnome-displays service --remove` then `gnome-displays setup --remove`.

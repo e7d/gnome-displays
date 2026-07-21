@@ -24,8 +24,7 @@ die() {
 }
 have() { command -v "$1" &>/dev/null; }
 
-# curl | bash feeds the installer itself on stdin, so interactive prompts
-# must read from the terminal directly; skip them when there is no tty.
+# under `curl | bash`, stdin is the script itself, so prompts must use the tty
 if [[ -r /dev/tty ]]; then
   TTY=/dev/tty
 else
