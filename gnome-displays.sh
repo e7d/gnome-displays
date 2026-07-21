@@ -4,6 +4,16 @@ set -o pipefail
 
 SCRIPT_NAME=$(basename "$0" .sh)
 CONFIG_DIR="$HOME/.config/gnome-displays"
+INSTALL_DIR="$HOME/.local/bin"
+INSTALL_PATH="$INSTALL_DIR/gnome-displays"
+SERVICE_NAME="gnome-displays.service"
+SERVICE_DIR="$HOME/.config/systemd/user"
+SERVICE_PATH="$SERVICE_DIR/$SERVICE_NAME"
+AUTOSTART_DIR="$HOME/.config/autostart"
+AUTOSTART_PATH="$AUTOSTART_DIR/gnome-displays.desktop"
+SETTLE_SECONDS=3
+MUTTER_DEST="org.gnome.Mutter.DisplayConfig"
+MUTTER_PATH="/org/gnome/Mutter/DisplayConfig"
 
 bold() {
   echo -e "\033[1m$1\033[0m"
@@ -23,14 +33,18 @@ help() {
   echo "  help         Show this help message."
   echo "  list         List all saved display configurations."
   echo "  save         Save the current display configuration."
+  echo "  service      Manage the auto-apply user service (login & monitor hotplug)."
+  echo "  setup        Install this script as a command in ~/.local/bin."
   echo "  show         Show details of a saved display configuration."
   echo "  verify       Verify a saved display configuration."
   echo
   echo "Arguments and options:"
-  echo "  apply [<name>|auto] [--force]"
+  echo "  apply [<name>|auto] [--force] [--persistent|--temporary]"
   echo "    <name>       Name of the configuration to apply."
   echo "    auto         Pick the best profile for the connected monitors (default when omitted)."
   echo "    --force      Re-apply even if the profile is already in use."
+  echo "    --persistent Persist across reboots; prompts for confirmation (default)."
+  echo "    --temporary  Apply for this session only; no confirmation prompt."
   echo "  completion <shell>"
   echo "    <shell>      Shell to target: bash, fish or zsh."
   echo "  delete <name>"
@@ -40,10 +54,21 @@ help() {
   echo "    --raw        Print names only, without monitor counts."
   echo "  save <name>"
   echo "    <name>       Name to save the current configuration under."
+  echo "  service [--install|--status|--remove]"
+  echo "    --install    Install, enable and start the service (requires setup first)."
+  echo "    --status     Show install and running state (default when omitted)."
+  echo "    --remove     Stop, disable and remove the service."
+  echo "  setup [--remove]"
+  echo "    --remove     Uninstall the command from ~/.local/bin."
   echo "  show <name>"
   echo "    <name>       Name of the configuration to show."
   echo "  verify <name>"
   echo "    <name>       Name of the configuration to verify."
+  echo
+  echo "Advanced usage:"
+  echo "  watch          Apply the best profile now, then re-apply on every monitor"
+  echo "                 change (temporary mode). Normally run by the service; you"
+  echo "                 can run it in the foreground to watch its behaviour."
 }
 
 completion() {
@@ -60,10 +85,10 @@ _gnome_displays_completions() {
   COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  opts="apply completion delete help list save show verify"
+  opts="apply completion delete help list save service setup show verify"
   case "$prev" in
     apply)
-      configs="auto --force $(__SCRIPT_NAME__ list --available --raw 2>/dev/null)"
+      configs="auto --force --persistent --temporary $(__SCRIPT_NAME__ list --available --raw 2>/dev/null)"
       COMPREPLY=( $(compgen -W "$configs" -- "$cur") )
       return 0
       ;;
@@ -78,6 +103,14 @@ _gnome_displays_completions() {
       ;;
     list)
       COMPREPLY=( $(compgen -W "--available --raw" -- "$cur") )
+      return 0
+      ;;
+    service)
+      COMPREPLY=( $(compgen -W "--install --status --remove" -- "$cur") )
+      return 0
+      ;;
+    setup)
+      COMPREPLY=( $(compgen -W "--remove" -- "$cur") )
       return 0
       ;;
   esac
@@ -109,16 +142,26 @@ complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcomman
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "help" --description "Show help message"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "list" --description "List all saved display configurations"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "save" --description "Save the current display configuration"
+complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "service" --description "Manage the auto-apply user service"
+complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "setup" --description "Install the command in ~/.local/bin"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "show" --description "Show details of a specific display configuration"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "verify" --description "Verify a saved display configuration"
+complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_use_subcommand" --arguments "watch" --description "Advanced: apply now and re-apply on monitor changes"
 # <name>
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_seen_subcommand_from show" --arguments "(__gnome_displays_config_names)" --description "Configuration name"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_seen_subcommand_from save" --arguments "(__gnome_displays_config_names)" --description "Configuration name"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_seen_subcommand_from apply" --arguments "auto" --description "Auto-select the best profile"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_seen_subcommand_from apply" --arguments "(__gnome_displays_available_config_names)" --description "Configuration name"
 complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from apply" --long-option "force" --description "Re-apply even if already in use"
+complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from apply" --long-option "persistent" --description "Persist across reboots (default)"
+complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from apply" --long-option "temporary" --description "Apply for this session only, no prompt"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_seen_subcommand_from verify" --arguments "(__gnome_displays_config_names)" --description "Configuration name"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_seen_subcommand_from delete" --arguments "(__gnome_displays_config_names)" --description "Configuration name"
+# service / setup options
+complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from service" --long-option "install" --description "Install, enable and start the service"
+complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from service" --long-option "status" --description "Show install and running state"
+complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from service" --long-option "remove" --description "Stop, disable and remove the service"
+complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from setup" --long-option "remove" --description "Uninstall the command"
 # <shell>
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_seen_subcommand_from completion" --arguments "bash fish zsh" --description "Shell type"
 EOF
@@ -130,7 +173,7 @@ EOF
 ___SCRIPT_NAME___completions() {
   local context state line
   local -a actions
-  actions=(apply completion delete help list save show verify)
+  actions=(apply completion delete help list save service setup show verify watch)
   local -a configs_all
   local -a configs_available
   configs_all=()
@@ -145,17 +188,21 @@ ___SCRIPT_NAME___completions() {
     done
   fi
   _arguments -C \
-    '1:action:((apply completion delete help list save show verify))' \
+    '1:action:((apply completion delete help list save service setup show verify watch))' \
     '2:shell:(bash fish zsh)' \
     '2:config name:->config'
 
   case $state in
     config)
       if [[ ${words[2]} == "apply" ]]; then
-        configs_available=(auto --force $configs_available)
+        configs_available=(auto --force --persistent --temporary $configs_available)
         _describe -t configs 'available configs' configs_available
       elif [[ ${words[2]} == "show" || ${words[2]} == "save" || ${words[2]} == "verify" || ${words[2]} == "delete" ]]; then
         _describe -t configs 'configs' configs_all
+      elif [[ ${words[2]} == "service" ]]; then
+        _describe -t options 'service options' '(--install --status --remove)'
+      elif [[ ${words[2]} == "setup" ]]; then
+        _describe -t options 'setup options' '(--remove)'
       fi
       ;;
   esac
@@ -171,7 +218,7 @@ EOF
 }
 
 check_dependencies() {
-  local DEPENDENCIES=("jq" "gdctl" "gawk" "column")
+  local DEPENDENCIES=("jq" "gdctl" "gawk" "column" "$@")
   local MISSING_DEPS=()
   for DEP in "${DEPENDENCIES[@]}"; do
     if ! command -v "$DEP" &>/dev/null; then
@@ -185,7 +232,24 @@ check_dependencies() {
   fi
 }
 
-check_configuration() {
+mutter_available() {
+  gdbus introspect --session --dest "$MUTTER_DEST" --object-path "$MUTTER_PATH" &>/dev/null
+}
+
+require_gnome_session() {
+  check_dependencies gdbus
+  if ! mutter_available; then
+    err "This action requires an active GNOME (Mutter) session."
+    err "'$MUTTER_DEST' is not reachable on the current session bus."
+    exit 1
+  fi
+}
+
+has_systemd_user() {
+  [[ -n "$XDG_RUNTIME_DIR" ]] && systemctl --user show-environment &>/dev/null
+}
+
+check_configuration() { 
   local NAME="$1"
   local ACTION="$2"
   if [[ -z "$NAME" ]]; then
@@ -197,7 +261,7 @@ check_configuration() {
     err "Configuration $NAME does not exist."
     err ""
     err "Available configurations:"
-    list >&2
+    print_configurations false false >&2
     exit 1
   fi
 }
@@ -245,21 +309,10 @@ count_found_monitors() {
     done | wc -l
 }
 
-list() {
-  local RAW_MODE=false
-  local AVAILABLE_ONLY=false
-  local ARG FILE NAME MONITORS FOUND_MONITORS
-
-  for ARG in "$@"; do
-    case "$ARG" in
-    --raw)
-      RAW_MODE=true
-      ;;
-    --available)
-      AVAILABLE_ONLY=true
-      ;;
-    esac
-  done
+print_configurations() {
+  local RAW_MODE="$1"
+  local AVAILABLE_ONLY="$2"
+  local FILE NAME MONITORS FOUND_MONITORS
 
   shopt -s nullglob
   local FILES=("$CONFIG_DIR"/*.json)
@@ -294,6 +347,22 @@ list() {
       print_monitor "$NAME" "$FOUND_MONITORS" "$MONITORS"
     fi
   done
+}
+
+list() {
+  shift
+  local RAW_MODE=false AVAILABLE_ONLY=false ARG
+  for ARG in "$@"; do
+    case "$ARG" in
+    --raw)
+      RAW_MODE=true
+      ;;
+    --available)
+      AVAILABLE_ONLY=true
+      ;;
+    esac
+  done
+  print_configurations "$RAW_MODE" "$AVAILABLE_ONLY"
 }
 
 show() {
@@ -476,23 +545,38 @@ run_gdctl() {
   local MODE_FLAG="$2"
   local FORCE="$3"
 
-  local VERB="run"
-  if [[ "$MODE_FLAG" == "--persistent" ]]; then
+  local VERB GDCTL_FLAGS=()
+  case "$MODE_FLAG" in
+  --persistent)
     VERB="apply"
-  elif [[ "$MODE_FLAG" == "--verify" ]]; then
+    GDCTL_FLAGS=(--persistent)
+    ;;
+  --temporary)
+    VERB="apply"
+    ;;
+  --verify)
     VERB="verify"
-  fi
+    GDCTL_FLAGS=(--verify)
+    ;;
+  *)
+    VERB="run"
+    ;;
+  esac
 
   check_configuration "$NAME" "$VERB"
   check_dependencies
 
-  if [[ "$MODE_FLAG" == "--persistent" ]]; then
+  case "$VERB" in
+  apply)
     echo -n "Applying $NAME... "
-  elif [[ "$MODE_FLAG" == "--verify" ]]; then
+    ;;
+  verify)
     echo -n "Validating $NAME... "
-  else
+    ;;
+  *)
     echo -n "Running $NAME... "
-  fi
+    ;;
+  esac
 
   local MISSING_MONITORS
   MISSING_MONITORS=$(get_missing_monitors "$CONFIG_DIR/$NAME.json")
@@ -505,13 +589,13 @@ run_gdctl() {
     exit 1
   fi
 
-  if [[ "$MODE_FLAG" == "--persistent" && "$FORCE" != "true" ]] && config_matches_current "$CONFIG_DIR/$NAME.json"; then
+  if [[ "$VERB" == "apply" && "$FORCE" != "true" ]] && config_matches_current "$CONFIG_DIR/$NAME.json"; then
     echo "✅ (already applied)"
     return 0
   fi
 
   local CMD monitor OUTPUT
-  CMD=(gdctl set "$MODE_FLAG")
+  CMD=(gdctl set "${GDCTL_FLAGS[@]}")
   while IFS='|' read -r vendor product serial mode colorMode x y scale transform primary; do
     [[ -z "$vendor" ]] && continue
     monitor=$(get_monitor "$vendor" "$product" "$serial")
@@ -534,8 +618,7 @@ run_gdctl() {
     )
   done < <(jq -r '.[] | "\(.vendor)|\(.product)|\(.serial)|\(.mode)|\(.colorMode)|\(.x)|\(.y)|\(.scale)|\(.transform)|\(.primary)"' "$CONFIG_DIR/$NAME.json")
 
-  OUTPUT=$("${CMD[@]}" 2>&1)
-  if [[ $? -ne 0 ]]; then
+  if ! OUTPUT=$("${CMD[@]}" 2>&1); then
     echo "❌"
     err "$OUTPUT"
     exit 1
@@ -545,6 +628,7 @@ run_gdctl() {
 
 apply_auto() {
   local FORCE="$1"
+  local MODE="${2:---persistent}"
   check_dependencies
 
   shopt -s nullglob
@@ -580,12 +664,13 @@ apply_auto() {
   local MONITOR_LABEL="monitors"
   [[ "$BEST_COUNT" -eq 1 ]] && MONITOR_LABEL="monitor"
   echo "Auto-selected $(bold "$BEST_NAME") ($BEST_COUNT $MONITOR_LABEL)."
-  run_gdctl "$BEST_NAME" --persistent "$FORCE"
+  run_gdctl "$BEST_NAME" "$MODE" "$FORCE"
 }
 
 apply() {
   shift
   local FORCE=false
+  local MODE="--persistent"
   local NAME=""
   local ARG
   for ARG in "$@"; do
@@ -593,9 +678,15 @@ apply() {
     --force)
       FORCE=true
       ;;
+    --persistent)
+      MODE="--persistent"
+      ;;
+    --temporary)
+      MODE="--temporary"
+      ;;
     --*)
       err "Error: Unknown option: $ARG"
-      err "Usage: $SCRIPT_NAME apply [<name>|auto] [--force]"
+      err "Usage: $SCRIPT_NAME apply [<name>|auto] [--force] [--persistent|--temporary]"
       exit 1
       ;;
     *)
@@ -605,11 +696,11 @@ apply() {
   done
 
   if [[ -z "$NAME" || "$NAME" == "auto" ]]; then
-    apply_auto "$FORCE"
+    apply_auto "$FORCE" "$MODE"
     return
   fi
   check_configuration "$NAME" "apply"
-  run_gdctl "$NAME" --persistent "$FORCE"
+  run_gdctl "$NAME" "$MODE" "$FORCE"
 }
 
 verify() {
@@ -631,6 +722,232 @@ delete() {
   fi
 }
 
+watch() {
+  check_dependencies gdbus
+
+  local i
+  for ((i = 0; i < 30; i++)); do
+    mutter_available && break
+    if [[ $i -eq 0 ]]; then
+      echo "Waiting for the GNOME (Mutter) session..."
+    fi
+    if [[ $i -eq 29 ]]; then
+      err "GNOME (Mutter) session not available after 30s; giving up."
+      exit 1
+    fi
+    sleep 1
+  done
+
+  echo "Watching for display changes (settle ${SETTLE_SECONDS}s, Ctrl-C to stop)."
+  (apply_auto false --temporary) || true
+
+  local line pending=0 rc
+  while true; do
+    IFS= read -r -t "$SETTLE_SECONDS" line
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+      [[ "$line" == *MonitorsChanged* ]] && pending=1
+    elif [[ $rc -gt 128 ]]; then
+      if [[ $pending -eq 1 ]]; then
+        pending=0
+        (apply_auto false --temporary) || true
+      fi
+    else
+      err "Display change stream closed; exiting for restart."
+      exit 1
+    fi
+  done < <(gdbus monitor --session --dest "$MUTTER_DEST" --object-path "$MUTTER_PATH" 2>/dev/null)
+}
+
+setup() {
+  shift
+  local REMOVE=false ARG
+  for ARG in "$@"; do
+    case "$ARG" in
+    --remove)
+      REMOVE=true
+      ;;
+    *)
+      err "Error: Unknown option: $ARG"
+      err "Usage: $SCRIPT_NAME setup [--remove]"
+      exit 1
+      ;;
+    esac
+  done
+
+  if [[ "$REMOVE" == "true" ]]; then
+    if [[ ! -e "$INSTALL_PATH" ]]; then
+      echo "Not installed at $INSTALL_PATH."
+      exit 0
+    fi
+    read -rp "Remove $INSTALL_PATH? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+      echo "Aborted."
+      exit 0
+    fi
+    rm -f "$INSTALL_PATH"
+    echo "Removed $INSTALL_PATH."
+    return 0
+  fi
+
+  local SOURCE
+  SOURCE=$(readlink -f "$0")
+  mkdir -p "$INSTALL_DIR"
+  if [[ "$SOURCE" == "$INSTALL_PATH" ]]; then
+    echo "Already installed at $(bold "$INSTALL_PATH")."
+  else
+    install -m 755 "$SOURCE" "$INSTALL_PATH"
+    echo "Installed $(bold "$INSTALL_PATH")."
+  fi
+
+  case ":$PATH:" in
+  *":$INSTALL_DIR:"*) ;;
+  *)
+    err ""
+    err "Note: $INSTALL_DIR is not on your PATH. Add it, e.g.:"
+    err "  fish:     fish_add_path $INSTALL_DIR"
+    err "  bash/zsh: export PATH=\"$INSTALL_DIR:\$PATH\""
+    ;;
+  esac
+}
+
+write_service_unit() {
+  mkdir -p "$SERVICE_DIR"
+  cat >"$SERVICE_PATH" <<EOF
+[Unit]
+Description=Auto-apply GNOME display configuration on login and monitor hotplug
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_PATH watch
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+}
+
+install_autostart() {
+  mkdir -p "$AUTOSTART_DIR"
+  cat >"$AUTOSTART_PATH" <<EOF
+[Desktop Entry]
+Type=Application
+Name=GNOME Displays auto-apply
+Exec=$INSTALL_PATH watch
+X-GNOME-Autostart-enabled=true
+NoDisplay=true
+EOF
+  echo "Installed autostart entry $(bold "$AUTOSTART_PATH")."
+}
+
+service_install() {
+  require_gnome_session
+
+  if [[ ! -x "$INSTALL_PATH" ]]; then
+    err "The gnome-displays binary is not installed at $INSTALL_PATH."
+    err "Run '$SCRIPT_NAME setup' first."
+    exit 1
+  fi
+
+  if ! has_systemd_user; then
+    err "No systemd user instance detected."
+    read -rp "Install an XDG autostart entry instead? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+      echo "Aborted."
+      exit 0
+    fi
+    install_autostart
+    return 0
+  fi
+
+  check_dependencies systemctl
+  write_service_unit
+  systemctl --user daemon-reload
+  systemctl --user enable --now "$SERVICE_NAME"
+  echo "Service $(bold "$SERVICE_NAME") installed and started."
+  echo "Logs: journalctl --user -u $SERVICE_NAME -f"
+}
+
+service_status() {
+  check_dependencies systemctl
+  if [[ -x "$INSTALL_PATH" ]]; then
+    echo "Binary:    installed ($INSTALL_PATH)"
+  else
+    echo "Binary:    not installed"
+  fi
+  if [[ -f "$SERVICE_PATH" ]]; then
+    local enabled active
+    enabled=$(systemctl --user is-enabled "$SERVICE_NAME" 2>/dev/null || echo "disabled")
+    active=$(systemctl --user is-active "$SERVICE_NAME" 2>/dev/null || echo "inactive")
+    echo "Unit:      $SERVICE_PATH"
+    echo "Enabled:   $enabled"
+    echo "Active:    $active"
+  else
+    echo "Unit:      not installed"
+  fi
+  if [[ -f "$AUTOSTART_PATH" ]]; then
+    echo "Autostart: $AUTOSTART_PATH"
+  fi
+}
+
+service_remove() {
+  check_dependencies systemctl
+  local REMOVED=false
+  if [[ -f "$SERVICE_PATH" ]]; then
+    systemctl --user disable --now "$SERVICE_NAME" 2>/dev/null
+    rm -f "$SERVICE_PATH"
+    systemctl --user daemon-reload
+    echo "Removed $SERVICE_NAME."
+    REMOVED=true
+  fi
+  if [[ -f "$AUTOSTART_PATH" ]]; then
+    rm -f "$AUTOSTART_PATH"
+    echo "Removed autostart entry."
+    REMOVED=true
+  fi
+  if [[ "$REMOVED" != "true" ]]; then
+    echo "Nothing to remove."
+  fi
+}
+
+service() {
+  shift
+  local OP="status" ARG
+  for ARG in "$@"; do
+    case "$ARG" in
+    --install)
+      OP="install"
+      ;;
+    --status)
+      OP="status"
+      ;;
+    --remove)
+      OP="remove"
+      ;;
+    *)
+      err "Error: Unknown option: $ARG"
+      err "Usage: $SCRIPT_NAME service [--install|--status|--remove]"
+      exit 1
+      ;;
+    esac
+  done
+
+  case "$OP" in
+  install)
+    service_install
+    ;;
+  status)
+    service_status
+    ;;
+  remove)
+    service_remove
+    ;;
+  esac
+}
+
 ACTION="$1"
 case "$ACTION" in
 apply)
@@ -648,11 +965,20 @@ list)
 save)
   COMMAND="save"
   ;;
+service)
+  COMMAND="service"
+  ;;
+setup)
+  COMMAND="setup"
+  ;;
 show)
   COMMAND="show"
   ;;
 verify)
   COMMAND="verify"
+  ;;
+watch)
+  COMMAND="watch"
   ;;
 help | "")
   help
