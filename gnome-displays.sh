@@ -958,6 +958,14 @@ update() {
   fi
 }
 
+connected_signature() {
+  gdctl show 2>/dev/null | gawk '
+    /Vendor:/  { sub(/^.*Vendor:[ ]*/, "");  v = $0 }
+    /Product:/ { sub(/^.*Product:[ ]*/, ""); p = $0 }
+    /Serial:/  { sub(/^.*Serial:[ ]*/, "");  print v "|" p "|" $0 }
+  ' | sort | tr '\n' ';'
+}
+
 watch() {
   check_dependencies gdbus
 
@@ -974,10 +982,12 @@ watch() {
     sleep 1
   done
 
-  echo "Watching for display changes (settle ${SETTLE_SECONDS}s, Ctrl-C to stop)."
+  echo "Watching for monitor hotplug (settle ${SETTLE_SECONDS}s, Ctrl-C to stop)."
+  local last_sig
+  last_sig=$(connected_signature)
   (apply_auto false --temporary) || true
 
-  local line pending=0 rc
+  local line pending=0 rc sig
   while true; do
     IFS= read -r -t "$SETTLE_SECONDS" line
     rc=$?
@@ -986,7 +996,11 @@ watch() {
     elif [[ $rc -gt 128 ]]; then
       if [[ $pending -eq 1 ]]; then
         pending=0
-        (apply_auto false --temporary) || true
+        sig=$(connected_signature)
+        if [[ "$sig" != "$last_sig" ]]; then
+          last_sig="$sig"
+          (apply_auto false --temporary) || true
+        fi
       fi
     else
       err "Display change stream closed; exiting for restart."
