@@ -1,0 +1,16 @@
+#!/bin/bash
+
+set -euo pipefail
+
+IMAGE=koalaman/shellcheck@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+FILES=(gnome-displays.sh install.sh)
+
+if command -v docker &>/dev/null; then
+  docker run --rm -v "$PWD:/mnt" -w /mnt "$IMAGE" "${FILES[@]}"
+elif command -v shellcheck &>/dev/null; then
+  echo "pre-commit: docker not found, using local shellcheck (may differ from CI)." >&2
+  shellcheck "${FILES[@]}"
+else
+  echo "pre-commit: install docker or shellcheck to lint before committing." >&2
+  exit 1
+fi

@@ -822,11 +822,11 @@ update() {
   trap 'rm -f "$TMP" "$SUMS"' EXIT
 
   echo -n "Downloading $LATEST_VERSION... "
-  fetch_url "$BASE/gnome-displays.sh" >"$TMP" && [[ -s "$TMP" ]] || {
+  if ! fetch_url "$BASE/gnome-displays.sh" >"$TMP" || [[ ! -s "$TMP" ]]; then
     echo "❌"
     err "Download failed."
     exit 1
-  }
+  fi
   fetch_url "$BASE/SHA256SUMS" >"$SUMS" || {
     echo "❌"
     err "Could not fetch checksums."
