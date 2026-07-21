@@ -69,12 +69,13 @@ help() {
   echo "  version      Show the installed version."
   echo
   echo "Arguments and options:"
-  echo "  apply [<name>|auto] [--force] [--persistent|--temporary]"
+  echo "  apply [<name>|auto] [--force] [--persistent|--temporary] [--partial]"
   echo "    <name>       Name of the configuration to apply."
   echo "    auto         Pick the best profile for the connected monitors (default when omitted)."
   echo "    --force      Re-apply even if the profile is already in use."
   echo "    --persistent Persist across reboots; prompts for confirmation (default)."
   echo "    --temporary  Apply for this session only; no confirmation prompt."
+  echo "    --partial    Apply only the connected monitors, leaving the rest off (implies --temporary)."
   echo "  completion <shell>"
   echo "    <shell>      Shell to target: bash, fish or zsh."
   echo "  delete <name>"
@@ -121,7 +122,7 @@ _gnome_displays_completions() {
   opts="apply completion delete help list save service setup show update verify version"
   case "$prev" in
     apply)
-      configs="auto --force --persistent --temporary $(__SCRIPT_NAME__ list --available --raw 2>/dev/null)"
+      configs="auto --force --persistent --temporary --partial $(__SCRIPT_NAME__ list --available --raw 2>/dev/null)"
       COMPREPLY=( $(compgen -W "$configs" -- "$cur") )
       return 0
       ;;
@@ -194,6 +195,7 @@ complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_seen_subcomma
 complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from apply" --long-option "force" --description "Re-apply even if already in use"
 complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from apply" --long-option "persistent" --description "Persist across reboots (default)"
 complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from apply" --long-option "temporary" --description "Apply for this session only, no prompt"
+complete --command __SCRIPT_NAME__ --condition "__fish_seen_subcommand_from apply" --long-option "partial" --description "Apply only the connected monitors"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_seen_subcommand_from verify" --arguments "(__gnome_displays_config_names)" --description "Configuration name"
 complete --command __SCRIPT_NAME__ --exclusive --condition "__fish_seen_subcommand_from delete" --arguments "(__gnome_displays_config_names)" --description "Configuration name"
 # service / setup options
@@ -237,7 +239,7 @@ ___SCRIPT_NAME___completions() {
   case $state in
     config)
       if [[ ${words[2]} == "apply" ]]; then
-        configs_available=(auto --force --persistent --temporary $configs_available)
+        configs_available=(auto --force --persistent --temporary --partial $configs_available)
         _describe -t configs 'available configs' configs_available
       elif [[ ${words[2]} == "show" || ${words[2]} == "save" || ${words[2]} == "verify" || ${words[2]} == "delete" ]]; then
         _describe -t configs 'configs' configs_all
@@ -608,6 +610,7 @@ run_gdctl() {
   local NAME="$1"
   local MODE_FLAG="$2"
   local FORCE="$3"
+  local PARTIAL="${4:-false}"
 
   local VERB GDCTL_FLAGS=()
   case "$MODE_FLAG" in
@@ -644,7 +647,7 @@ run_gdctl() {
 
   local MISSING_MONITORS
   MISSING_MONITORS=$(get_missing_monitors "$CONFIG_DIR/$NAME.json")
-  if [[ -n "$MISSING_MONITORS" ]]; then
+  if [[ -n "$MISSING_MONITORS" && "$PARTIAL" != "true" ]]; then
     echo "❌"
     err "The following monitors are missing or not connected:"
     while IFS= read -r monitor; do
@@ -653,34 +656,45 @@ run_gdctl() {
     exit 1
   fi
 
-  if [[ "$VERB" == "apply" && "$FORCE" != "true" ]] && config_matches_current "$CONFIG_DIR/$NAME.json"; then
+  if [[ "$VERB" == "apply" && "$FORCE" != "true" && "$PARTIAL" != "true" ]] &&
+    config_matches_current "$CONFIG_DIR/$NAME.json"; then
     echo "✅ (already applied)"
     return 0
   fi
 
-  local CMD monitor OUTPUT
+  local CMD OUTPUT
   CMD=(gdctl set "${GDCTL_FLAGS[@]}")
-  while IFS='|' read -r vendor product serial mode colorMode x y scale transform primary; do
-    [[ -z "$vendor" ]] && continue
-    monitor=$(get_monitor "$vendor" "$product" "$serial")
-    CMD+=(--logical-monitor)
-    if [[ "$primary" == "true" ]]; then
-      CMD+=(--primary)
-    fi
-    CMD+=(
-      --monitor "$monitor"
-      --mode "$mode"
-    )
-    if [[ "$colorMode" == "default" || "$colorMode" == "bt2100" || "$colorMode" == "sdr-native" ]]; then
-      CMD+=(--color-mode "$colorMode")
-    fi
-    CMD+=(
-      --x "$x"
-      --y "$y"
-      --scale "$scale"
-      --transform "$transform"
-    )
-  done < <(jq -r '.[] | "\(.vendor)|\(.product)|\(.serial)|\(.mode)|\(.colorMode)|\(.x)|\(.y)|\(.scale)|\(.transform)|\(.primary)"' "$CONFIG_DIR/$NAME.json")
+  if [[ "$PARTIAL" == "true" ]]; then
+    build_partial_args "$NAME" || {
+      echo "❌"
+      err "None of $NAME's monitors are connected."
+      exit 1
+    }
+    CMD+=("${PARTIAL_ARGS[@]}")
+  else
+    local vendor product serial mode colorMode x y scale transform primary monitor
+    while IFS='|' read -r vendor product serial mode colorMode x y scale transform primary; do
+      [[ -z "$vendor" ]] && continue
+      monitor=$(get_monitor "$vendor" "$product" "$serial")
+      CMD+=(--logical-monitor)
+      if [[ "$primary" == "true" ]]; then
+        CMD+=(--primary)
+      fi
+      CMD+=(
+        --monitor "$monitor"
+        --mode "$mode"
+      )
+      if [[ "$colorMode" == "default" || "$colorMode" == "bt2100" || "$colorMode" == "sdr-native" ]]; then
+        CMD+=(--color-mode "$colorMode")
+      fi
+      CMD+=(
+        --x "$x"
+        --y "$y"
+        --scale "$scale"
+        --transform "$transform"
+      )
+    done < <(jq -r '.[] | "\(.vendor)|\(.product)|\(.serial)|\(.mode)|\(.colorMode)|\(.x)|\(.y)|\(.scale)|\(.transform)|\(.primary)"' "$CONFIG_DIR/$NAME.json")
+  fi
 
   if ! OUTPUT=$("${CMD[@]}" 2>&1); then
     echo "❌"
@@ -688,11 +702,53 @@ run_gdctl() {
     exit 1
   fi
   echo "✅"
+  if [[ "$PARTIAL" == "true" && -n "$MISSING_MONITORS" ]]; then
+    echo "Left off (not connected):"
+    while IFS= read -r monitor; do
+      echo "- $monitor"
+    done <<< "$MISSING_MONITORS"
+  fi
+}
+
+build_partial_args() {
+  local NAME="$1"
+  PARTIAL_ARGS=()
+  local vendor product serial mode colorMode x y scale transform primary monitor
+  local min_x="" min_y="" has_primary=false first=true
+  local -a entries=()
+  while IFS='|' read -r vendor product serial mode colorMode x y scale transform primary; do
+    [[ -z "$vendor" ]] && continue
+    monitor=$(get_monitor "$vendor" "$product" "$serial")
+    [[ -z "$monitor" ]] && continue
+    [[ -z "$min_x" || "$x" -lt "$min_x" ]] && min_x="$x"
+    [[ -z "$min_y" || "$y" -lt "$min_y" ]] && min_y="$y"
+    [[ "$primary" == "true" ]] && has_primary=true
+    entries+=("$monitor|$mode|$colorMode|$x|$y|$scale|$transform|$primary")
+  done < <(jq -r '.[] | "\(.vendor)|\(.product)|\(.serial)|\(.mode)|\(.colorMode)|\(.x)|\(.y)|\(.scale)|\(.transform)|\(.primary)"' "$CONFIG_DIR/$NAME.json")
+
+  [[ ${#entries[@]} -eq 0 ]] && return 1
+
+  local e
+  for e in "${entries[@]}"; do
+    IFS='|' read -r monitor mode colorMode x y scale transform primary <<< "$e"
+    PARTIAL_ARGS+=(--logical-monitor)
+    if [[ "$primary" == "true" ]] || [[ "$has_primary" != "true" && "$first" == "true" ]]; then
+      PARTIAL_ARGS+=(--primary)
+    fi
+    PARTIAL_ARGS+=(--monitor "$monitor" --mode "$mode")
+    if [[ "$colorMode" == "default" || "$colorMode" == "bt2100" || "$colorMode" == "sdr-native" ]]; then
+      PARTIAL_ARGS+=(--color-mode "$colorMode")
+    fi
+    PARTIAL_ARGS+=(--x "$((x - min_x))" --y "$((y - min_y))" --scale "$scale" --transform "$transform")
+    first=false
+  done
+  return 0
 }
 
 apply_auto() {
   local FORCE="$1"
   local MODE="${2:---persistent}"
+  local PARTIAL="${3:-false}"
   check_dependencies
 
   shopt -s nullglob
@@ -713,10 +769,18 @@ apply_auto() {
     NAME=$(basename "$FILE" .json)
     MONITORS=$(jq -r '. | length' "$FILE")
     FOUND_MONITORS=$(count_found_monitors "$FILE")
-    [[ $FOUND_MONITORS -lt $MONITORS ]] && continue
-    if [[ $MONITORS -gt $BEST_COUNT ]]; then
-      BEST_COUNT=$MONITORS
-      BEST_NAME=$NAME
+    if [[ "$PARTIAL" == "true" ]]; then
+      [[ $FOUND_MONITORS -lt 1 ]] && continue
+      if [[ $FOUND_MONITORS -gt $BEST_COUNT ]]; then
+        BEST_COUNT=$FOUND_MONITORS
+        BEST_NAME=$NAME
+      fi
+    else
+      [[ $FOUND_MONITORS -lt $MONITORS ]] && continue
+      if [[ $MONITORS -gt $BEST_COUNT ]]; then
+        BEST_COUNT=$MONITORS
+        BEST_NAME=$NAME
+      fi
     fi
   done
 
@@ -728,13 +792,14 @@ apply_auto() {
   local MONITOR_LABEL="monitors"
   [[ "$BEST_COUNT" -eq 1 ]] && MONITOR_LABEL="monitor"
   echo "Auto-selected $(bold "$BEST_NAME") ($BEST_COUNT $MONITOR_LABEL)."
-  run_gdctl "$BEST_NAME" "$MODE" "$FORCE"
+  run_gdctl "$BEST_NAME" "$MODE" "$FORCE" "$PARTIAL"
 }
 
 apply() {
   shift
   local FORCE=false
   local MODE="--persistent"
+  local PARTIAL=false
   local NAME=""
   local ARG
   for ARG in "$@"; do
@@ -748,9 +813,12 @@ apply() {
     --temporary)
       MODE="--temporary"
       ;;
+    --partial)
+      PARTIAL=true
+      ;;
     --*)
       err "Error: Unknown option: $ARG"
-      err "Usage: $SCRIPT_NAME apply [<name>|auto] [--force] [--persistent|--temporary]"
+      err "Usage: $SCRIPT_NAME apply [<name>|auto] [--force] [--persistent|--temporary] [--partial]"
       exit 1
       ;;
     *)
@@ -759,12 +827,16 @@ apply() {
     esac
   done
 
+  if [[ "$PARTIAL" == "true" ]]; then
+    MODE="--temporary"
+  fi
+
   if [[ -z "$NAME" || "$NAME" == "auto" ]]; then
-    apply_auto "$FORCE" "$MODE"
+    apply_auto "$FORCE" "$MODE" "$PARTIAL"
     return
   fi
   check_configuration "$NAME" "apply"
-  run_gdctl "$NAME" "$MODE" "$FORCE"
+  run_gdctl "$NAME" "$MODE" "$FORCE" "$PARTIAL"
 }
 
 verify() {
